@@ -18,12 +18,19 @@ const fs = require("fs");
 const path = require("path");
 require("dotenv").config();
 
-// Bot configuration
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
-const GUILD_ID = process.env.GUILD_ID;
+const _rawBotToken = process.env.BOT_TOKEN;
+const BOT_TOKEN = _rawBotToken
+  ? _rawBotToken
+      .trim()
+      .replace(/^"|"$/g, "")
+      .replace(/^'|'$/g, "")
+      .replace(/^Bot\s+/i, "")
+  : undefined;
+const CLIENT_ID = process.env.CLIENT_ID
+  ? process.env.CLIENT_ID.trim()
+  : undefined;
+const GUILD_ID = process.env.GUILD_ID ? process.env.GUILD_ID.trim() : undefined;
 
-// Data storage (in production, use a proper database)
 const DATA_FILE = path.join(__dirname, "campaigns.json");
 
 class VireoCampaignBot {
@@ -51,7 +58,6 @@ class VireoCampaignBot {
     return {};
   }
 
-  // Persist campaigns to disk safely and asynchronously
   async saveCampaigns() {
     try {
       const tmp = `${DATA_FILE}.tmp`;
@@ -66,15 +72,12 @@ class VireoCampaignBot {
     }
   }
 
-  // Ensure a category exists with the given name; reuse existing or create new.
   async ensureCategory(guild, categoryName) {
     try {
-      // Try cache first
       let category = guild.channels.cache.find(
         (c) => c.type === ChannelType.GuildCategory && c.name === categoryName
       );
 
-      // If not in cache, try fetch all categories (best-effort)
       if (!category) {
         const fetched = await guild.channels.fetch().catch(() => null);
         if (fetched) {
@@ -86,7 +89,6 @@ class VireoCampaignBot {
       }
 
       if (category) {
-        // Ensure bot has expected overwrites on existing category
         try {
           await category.permissionOverwrites.edit(this.client.user.id, {
             ViewChannel: true,
@@ -102,7 +104,6 @@ class VireoCampaignBot {
         return category;
       }
 
-      // Create new category with safe overwrites
       const newCategory = await guild.channels.create({
         name: categoryName,
         type: ChannelType.GuildCategory,
@@ -130,12 +131,20 @@ class VireoCampaignBot {
   }
 
   setupEventHandlers() {
-    this.client.once("ready", () => {
+    this._readyHandled = false;
+    const onReady = () => {
+      if (this._readyHandled) return;
+      this._readyHandled = true;
       console.log(
         `🚀 Vireo Campaign Bot is ready! Logged in as ${this.client.user.tag}`
       );
-      this.client.user.setActivity("Managing Campaigns", { type: 3 });
-    });
+      try {
+        this.client.user.setActivity("Managing Campaigns", { type: 3 });
+      } catch (e) {}
+    };
+
+    this.client.once("ready", onReady);
+    this.client.once("clientReady", onReady);
 
     this.client.on("interactionCreate", async (interaction) => {
       if (interaction.isChatInputCommand()) {
@@ -349,7 +358,6 @@ class VireoCampaignBot {
       )
     ) {
       try {
-        // Try to find an existing category with the same name first
         const categoryName = `📊 ${title}`;
         let category = guild.channels.cache.find(
           (c) => c.type === ChannelType.GuildCategory && c.name === categoryName
@@ -375,7 +383,6 @@ class VireoCampaignBot {
             ],
           });
         } else {
-          // Ensure the bot has the expected overwrites on the existing category
           try {
             await category.permissionOverwrites.edit(this.client.user.id, {
               ViewChannel: true,
@@ -645,7 +652,6 @@ class VireoCampaignBot {
 
       await member.roles.add(campaignRole);
 
-      // Try to locate the category by id first, otherwise try by name
       let category = null;
       if (campaign && campaign.categoryId) {
         try {
@@ -849,6 +855,12 @@ class VireoCampaignBot {
   }
 
   async registerCommands() {
+    if (!BOT_TOKEN || !CLIENT_ID) {
+      throw new Error(
+        "Missing required env vars: BOT_TOKEN and CLIENT_ID are required to register slash commands."
+      );
+    }
+
     const commands = [
       new SlashCommandBuilder()
         .setName("create-campaign")
@@ -960,16 +972,31 @@ class VireoCampaignBot {
   }
 
   async start() {
-    await this.registerCommands();
-    await this.client.login(BOT_TOKEN);
+    if (!BOT_TOKEN) {
+      console.error(
+        "FATAL: BOT_TOKEN is not set or is invalid in environment. Set BOT_TOKEN in .env or the process environment."
+      );
+      process.exit(1);
+    }
+
+    try {
+      await this.registerCommands();
+    } catch (err) {
+      console.error("Error registering commands:", err.message || err);
+    }
+
+    try {
+      await this.client.login(BOT_TOKEN);
+    } catch (err) {
+      console.error("Login failed:", err.message || err);
+      process.exit(1);
+    }
   }
 }
 
-// Initialize and start the bot
 const bot = new VireoCampaignBot();
 bot.start().catch(console.error);
 
-// Handle process termination
 process.on("SIGINT", () => {
   console.log("Shutting down Vireo Campaign Bot...");
   bot.client.destroy();

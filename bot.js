@@ -51,16 +51,86 @@ class VireoCampaignBot {
     return {};
   }
 
-  saveCampaigns() {
+  // Persist campaigns to disk safely and asynchronously
+  async saveCampaigns() {
     try {
-      fs.writeFileSync(DATA_FILE, JSON.stringify(this.campaigns, null, 2));
+      const tmp = `${DATA_FILE}.tmp`;
+      await fs.promises.writeFile(
+        tmp,
+        JSON.stringify(this.campaigns, null, 2),
+        "utf8"
+      );
+      await fs.promises.rename(tmp, DATA_FILE);
     } catch (error) {
       console.error("Error saving campaigns:", error);
     }
   }
 
+  // Ensure a category exists with the given name; reuse existing or create new.
+  async ensureCategory(guild, categoryName) {
+    try {
+      // Try cache first
+      let category = guild.channels.cache.find(
+        (c) => c.type === ChannelType.GuildCategory && c.name === categoryName
+      );
+
+      // If not in cache, try fetch all categories (best-effort)
+      if (!category) {
+        const fetched = await guild.channels.fetch().catch(() => null);
+        if (fetched) {
+          category = fetched.find(
+            (c) =>
+              c.type === ChannelType.GuildCategory && c.name === categoryName
+          );
+        }
+      }
+
+      if (category) {
+        // Ensure bot has expected overwrites on existing category
+        try {
+          await category.permissionOverwrites.edit(this.client.user.id, {
+            ViewChannel: true,
+            ManageChannels: true,
+            ManageRoles: true,
+          });
+        } catch (permErr) {
+          console.warn(
+            "Could not edit permissions on existing category:",
+            permErr
+          );
+        }
+        return category;
+      }
+
+      // Create new category with safe overwrites
+      const newCategory = await guild.channels.create({
+        name: categoryName,
+        type: ChannelType.GuildCategory,
+        permissionOverwrites: [
+          {
+            id: guild.roles.everyone,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: this.client.user.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.ManageChannels,
+              PermissionFlagsBits.ManageRoles,
+            ],
+          },
+        ],
+      });
+
+      return newCategory;
+    } catch (err) {
+      console.error("ensureCategory error:", err);
+      return null;
+    }
+  }
+
   setupEventHandlers() {
-    this.client.once("clientReady", () => {
+    this.client.once("ready", () => {
       console.log(
         `🚀 Vireo Campaign Bot is ready! Logged in as ${this.client.user.tag}`
       );
@@ -126,6 +196,61 @@ class VireoCampaignBot {
       case "list-campaigns":
         await this.listCampaigns(interaction);
         break;
+      case "bot-audit":
+        await this.handleBotAudit(interaction);
+        break;
+    }
+  }
+
+  async handleBotAudit(interaction) {
+    try {
+      if (!interaction.inGuild() || !interaction.member) {
+        return interaction.reply({
+          content: "This command must be used in a guild by an administrator.",
+          flags: 64,
+        });
+      }
+
+      const guild = interaction.guild;
+      const me = guild?.members?.me;
+      if (!me) {
+        return interaction.reply({
+          content: "Could not determine bot member.",
+          flags: 64,
+        });
+      }
+
+      const needed = [
+        "ManageRoles",
+        "ManageChannels",
+        "SendMessages",
+        "EmbedLinks",
+        "ReadMessageHistory",
+        "ViewChannel",
+      ];
+
+      const has = [];
+      const missing = [];
+
+      const perms = me.permissions;
+      needed.forEach((p) => {
+        if (perms.has(PermissionFlagsBits[p])) has.push(p);
+        else missing.push(p);
+      });
+
+      const reply = `**Bot audit for ${guild.name}**\n\nBot role position: ${
+        me.roles.highest.position
+      }\nHas permissions: ${has.join(", ") || "None"}\nMissing permissions: ${
+        missing.join(", ") || "None"
+      }`;
+
+      await interaction.reply({ content: reply, flags: 64 });
+    } catch (err) {
+      console.error("handleBotAudit error:", err);
+      await interaction.reply({
+        content: "Error running bot audit.",
+        flags: 64,
+      });
     }
   }
 
@@ -214,7 +339,7 @@ class VireoCampaignBot {
       active: true,
       hasPrivateChannels: false,
     };
-    this.saveCampaigns();
+    await this.saveCampaigns();
 
     const guild = channel.guild;
     if (
@@ -224,30 +349,53 @@ class VireoCampaignBot {
       )
     ) {
       try {
-        const category = await guild.channels.create({
-          name: `📊 ${title}`,
-          type: ChannelType.GuildCategory,
-          permissionOverwrites: [
-            {
-              id: guild.roles.everyone,
-              deny: [PermissionFlagsBits.ViewChannel],
-            },
-            {
-              id: this.client.user.id,
-              allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.ManageChannels,
-                PermissionFlagsBits.ManageRoles,
-              ],
-            },
-          ],
-        });
+        // Try to find an existing category with the same name first
+        const categoryName = `📊 ${title}`;
+        let category = guild.channels.cache.find(
+          (c) => c.type === ChannelType.GuildCategory && c.name === categoryName
+        );
+
+        if (!category) {
+          category = await guild.channels.create({
+            name: categoryName,
+            type: ChannelType.GuildCategory,
+            permissionOverwrites: [
+              {
+                id: guild.roles.everyone,
+                deny: [PermissionFlagsBits.ViewChannel],
+              },
+              {
+                id: this.client.user.id,
+                allow: [
+                  PermissionFlagsBits.ViewChannel,
+                  PermissionFlagsBits.ManageChannels,
+                  PermissionFlagsBits.ManageRoles,
+                ],
+              },
+            ],
+          });
+        } else {
+          // Ensure the bot has the expected overwrites on the existing category
+          try {
+            await category.permissionOverwrites.edit(this.client.user.id, {
+              ViewChannel: true,
+              ManageChannels: true,
+              ManageRoles: true,
+            });
+          } catch (permErr) {
+            console.warn(
+              "Could not edit permissions on existing category:",
+              permErr
+            );
+          }
+        }
+
         this.campaigns[campaignId].categoryId = category.id;
         this.campaigns[campaignId].hasPrivateChannels = true;
-        this.saveCampaigns();
+        await this.saveCampaigns();
       } catch (err) {
         console.error(
-          "Failed to create category in processCreateCampaign:",
+          "Failed to create or find category in processCreateCampaign:",
           err
         );
       }
@@ -407,7 +555,7 @@ class VireoCampaignBot {
         payrateSection,
       };
 
-      this.saveCampaigns();
+      await this.saveCampaigns();
 
       const categoryName =
         interaction.options.getString("category-name") || `📊 ${title}`;
@@ -415,28 +563,9 @@ class VireoCampaignBot {
         interaction.options.getString("channel-prefix") || "workspace";
 
       const guild = interaction.guild;
-      const category = await guild.channels.create({
-        name: categoryName,
-        type: ChannelType.GuildCategory,
-        permissionOverwrites: [
-          {
-            id: guild.roles.everyone,
-            deny: [PermissionFlagsBits.ViewChannel],
-          },
+      const category = await this.ensureCategory(guild, categoryName);
 
-          {
-            id: this.client.user.id,
-            allow: [
-              PermissionFlagsBits.ViewChannel,
-              PermissionFlagsBits.ManageChannels,
-              PermissionFlagsBits.ManageRoles,
-              PermissionFlagsBits.SendMessages,
-            ],
-          },
-        ],
-      });
-
-      this.campaigns[campaignId].categoryId = category.id;
+      if (category) this.campaigns[campaignId].categoryId = category.id;
       this.campaigns[campaignId].channelPrefix = channelPrefix;
       this.campaigns[campaignId].customization = {
         buttonText,
@@ -447,7 +576,7 @@ class VireoCampaignBot {
         footerText,
         categoryName,
       };
-      this.saveCampaigns();
+      await this.saveCampaigns();
     } catch (error) {
       console.error("Error creating campaign:", error);
       await interaction.editReply({
@@ -516,7 +645,25 @@ class VireoCampaignBot {
 
       await member.roles.add(campaignRole);
 
-      const category = guild.channels.cache.get(campaign.categoryId);
+      // Try to locate the category by id first, otherwise try by name
+      let category = null;
+      if (campaign && campaign.categoryId) {
+        try {
+          category =
+            guild.channels.cache.get(campaign.categoryId) ||
+            (await guild.channels.fetch(campaign.categoryId).catch(() => null));
+        } catch (e) {
+          category = null;
+        }
+      }
+
+      if (!category && campaign && campaign.title) {
+        const expectedName = `📊 ${campaign.title}`;
+        category = guild.channels.cache.find(
+          (c) => c.type === ChannelType.GuildCategory && c.name === expectedName
+        );
+      }
+
       if (category) {
         try {
           await category.permissionOverwrites.edit(campaignRole, {
@@ -526,12 +673,24 @@ class VireoCampaignBot {
             AttachFiles: true,
             EmbedLinks: true,
           });
+
+          if (campaign && !campaign.categoryId) {
+            campaign.categoryId = category.id;
+            campaign.hasPrivateChannels = true;
+            await this.saveCampaigns();
+          }
         } catch (permErr) {
           console.error(
             "Failed to update category permission overwrites for role:",
             permErr
           );
         }
+      } else {
+        console.warn(
+          `No category found for campaign ${
+            campaign ? campaign.id : campaignId
+          }. Role will still be created.`
+        );
       }
 
       campaign.participants.push({
@@ -542,7 +701,7 @@ class VireoCampaignBot {
         roleId: campaignRole.id,
       });
 
-      this.saveCampaigns();
+      await this.saveCampaigns();
 
       await this.logCampaignJoin(guild, campaign, interaction.user);
 
@@ -607,7 +766,7 @@ class VireoCampaignBot {
 
       await message.edit({ embeds: [embed], components: [] });
 
-      this.saveCampaigns();
+      await this.saveCampaigns();
 
       await interaction.reply({
         content: `✅ Campaign "${campaign.title}" has been closed. ${campaign.participants.length} total participants.`,
@@ -772,6 +931,11 @@ class VireoCampaignBot {
       new SlashCommandBuilder()
         .setName("list-campaigns")
         .setDescription("List all campaigns with their IDs"),
+      new SlashCommandBuilder()
+        .setName("bot-audit")
+        .setDescription(
+          "Show bot permission audit for this guild (admin only)"
+        ),
     ].map((command) => command.toJSON());
 
     const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);

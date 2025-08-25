@@ -271,7 +271,7 @@ class VireoCampaignBot {
       );
 
       try {
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ flags: 64 });
       } catch (e) {
         try {
           await interaction.reply({
@@ -605,7 +605,7 @@ class VireoCampaignBot {
     const campaign = this.campaigns[campaignId];
 
     try {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
     } catch (e) {}
 
     const respond = async (opts) => {
@@ -645,9 +645,13 @@ class VireoCampaignBot {
       if (!campaignRole) {
         campaignRole = await guild.roles.create({
           name: `${campaign.title}`,
-          color: 0x4caf50,
           permissions: [],
         });
+        try {
+          await campaignRole.setColor(0x4caf50).catch(() => {});
+        } catch (e) {
+          // ignore color set failures
+        }
       }
 
       await member.roles.add(campaignRole);
@@ -865,6 +869,8 @@ class VireoCampaignBot {
       new SlashCommandBuilder()
         .setName("create-campaign")
         .setDescription("Create a new campaign embed (opens a modal)")
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .setDMPermission(false)
         .addStringOption((option) =>
           option
             .setName("logo")
@@ -929,6 +935,8 @@ class VireoCampaignBot {
       new SlashCommandBuilder()
         .setName("close-campaign")
         .setDescription("Close a campaign")
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .setDMPermission(false)
         .addStringOption((option) =>
           option
             .setName("campaign-id")
@@ -938,16 +946,20 @@ class VireoCampaignBot {
 
       new SlashCommandBuilder()
         .setName("campaign-stats")
-        .setDescription("Show statistics for active campaigns"),
+        .setDescription("Show statistics for active campaigns")
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .setDMPermission(false),
 
       new SlashCommandBuilder()
         .setName("list-campaigns")
-        .setDescription("List all campaigns with their IDs"),
+        .setDescription("List all campaigns with their IDs")
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .setDMPermission(false),
       new SlashCommandBuilder()
         .setName("bot-audit")
-        .setDescription(
-          "Show bot permission audit for this guild (admin only)"
-        ),
+        .setDescription("Show bot permission audit for this guild (admin only)")
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .setDMPermission(false),
     ].map((command) => command.toJSON());
 
     const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);

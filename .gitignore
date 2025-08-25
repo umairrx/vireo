@@ -1,0 +1,6 @@
+.env
+node_modules/
+campaigns.json
+.pnpm-debug.log
+npm-debug.log
+.DS_Store

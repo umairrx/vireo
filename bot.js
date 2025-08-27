@@ -676,13 +676,19 @@ class VireoCampaignBot {
 
       if (category) {
         try {
-          await category.permissionOverwrites.edit(campaignRole, {
-            ViewChannel: true,
-            SendMessages: true,
-            ReadMessageHistory: true,
-            AttachFiles: true,
-            EmbedLinks: true,
-          });
+          const existingOverwrite = category.permissionOverwrites.cache.find(
+            (ow) => String(ow.id) === String(campaignRole.id)
+          );
+
+          if (!existingOverwrite) {
+            await category.permissionOverwrites.edit(campaignRole, {
+              ViewChannel: true,
+              SendMessages: true,
+              ReadMessageHistory: true,
+              AttachFiles: true,
+              EmbedLinks: true,
+            });
+          }
 
           if (campaign && !campaign.categoryId) {
             campaign.categoryId = category.id;
